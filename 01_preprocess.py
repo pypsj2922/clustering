@@ -49,7 +49,18 @@ def main():
     df_clean = df.dropna(subset=available_feats + ['species']).reset_index(drop=True)
     print(f"[预处理] 清洗缺失值: {initial_len} -> {len(df_clean)} 行")
 
-    # 4. 标准化 (StandardScaler)
+    # 4. 异常值处理：使用 IQR 方法裁剪极端值（减少 DBSCAN 噪声）
+    print("[预处理] 正在处理异常值...")
+    for col in available_feats:
+        Q1 = df_clean[col].quantile(0.25)
+        Q3 = df_clean[col].quantile(0.75)
+        IQR = Q3 - Q1
+        lower = Q1 - 1.5 * IQR
+        upper = Q3 + 1.5 * IQR
+        # 裁剪而非删除，保留更多数据
+        df_clean[col] = df_clean[col].clip(lower, upper)
+    
+    # 5. 标准化 (StandardScaler)
     # 我们将标准化后的数据存为新列，后缀加 _std，保留原数据方便查看
     scaler = StandardScaler()
     X = df_clean[available_feats].values
@@ -61,7 +72,7 @@ def main():
     # 合并原始数据和标准化数据
     df_final = pd.concat([df_clean, df_scaled], axis=1)
 
-    # 5. 保存结果
+    # 6. 保存结果
     out_path = os.path.join(OUTPUT_DIR, 'penguins_processed.csv')
     df_final.to_csv(out_path, index=False)
     print(f"[预处理] 完成。已保存至: {out_path}")

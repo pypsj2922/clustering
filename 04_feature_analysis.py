@@ -61,14 +61,23 @@ def main():
     # hue='Species': 按照物种上色
     # diag_kind='hist': 对角线画直方图 (你的截图中是直方图)
     # height=2.5: 控制每张小图的大小
+    # 使用 palmerpenguins 官方风格的配色（带透明度，重叠时不会完全变灰）
+    penguin_colors = {
+        'Adelie': '#FF8C00',      # 橙色
+        'Chinstrap': '#A034F0',   # 紫色  
+        'Gentoo': '#057076'       # 青色
+    }
+    
     g = sns.pairplot(
         df_plot, 
         hue='Species', 
         diag_kind='hist',
         markers=["o", "s", "D"], # 设置不同物种点的形状
-        palette="tab10",         # 设置配色方案
+        palette=penguin_colors,  # 使用官方风格配色
         height=2.5,
-        corner=False             # 设为 True 可以只画左下角的一半
+        corner=False,            # 设为 True 可以只画左下角的一半
+        plot_kws={'alpha': 0.5}, # 散点图透明度
+        diag_kws={'alpha': 0.3}  # 直方图透明度
     )
 
     # 4. 添加总标题

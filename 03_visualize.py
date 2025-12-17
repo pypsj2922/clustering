@@ -55,11 +55,45 @@ def plot_pca_scatter(X_2d, labels, title, filename, save_dir):
     print(f"Saved scatter plot: {filename}")
 
 def plot_confusion_matrix(y_true, y_pred, title, filename, save_dir):
-    """通用混淆矩阵绘制函数"""
-    cm = pd.crosstab(y_true, y_pred, rownames=['True Species'], colnames=['Cluster'])
+    """通用混淆矩阵绘制函数 - 根据匹配关系重排，使正确预测在对角线上"""
+    from scipy.optimize import linear_sum_assignment
+    
+    # 过滤掉噪声点(-1)
+    mask = np.array(y_pred) != -1
+    y_true_filtered = np.array(y_true)[mask]
+    y_pred_filtered = np.array(y_pred)[mask]
+    
+    # 获取真实标签和预测簇的唯一值
+    true_labels = sorted(set(y_true_filtered))
+    pred_labels = sorted(set(y_pred_filtered))
+    
+    # 构建代价矩阵：每个簇与每个真实标签的匹配数量（取负数用于最大化）
+    cost_matrix = np.zeros((len(true_labels), len(pred_labels)))
+    for i, tl in enumerate(true_labels):
+        for j, pl in enumerate(pred_labels):
+            cost_matrix[i, j] = -np.sum((y_true_filtered == tl) & (y_pred_filtered == pl))
+    
+    # 使用匈牙利算法找到最佳匹配
+    row_ind, col_ind = linear_sum_assignment(cost_matrix)
+    
+    # 根据匹配结果重排列顺序：真实标签按 true_labels 顺序，预测簇按匹配顺序
+    ordered_pred_labels = [pred_labels[j] for j in col_ind]
+    
+    # 构建重排后的混淆矩阵
+    cm_data = []
+    for tl in true_labels:
+        row = []
+        for pl in ordered_pred_labels:
+            count = np.sum((y_true_filtered == tl) & (y_pred_filtered == pl))
+            row.append(count)
+        cm_data.append(row)
+    
+    cm_df = pd.DataFrame(cm_data, index=true_labels, columns=ordered_pred_labels)
     
     plt.figure(figsize=(6, 5))
-    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', square=True, cbar=False)
+    sns.heatmap(cm_df, annot=True, fmt='d', cmap='Blues', square=True, cbar=False)
+    plt.xlabel('Predicted Cluster')
+    plt.ylabel('True Species')
     plt.title(title, fontsize=14)
     path = os.path.join(save_dir, filename)
     plt.savefig(path, bbox_inches='tight', dpi=150)
@@ -92,9 +126,11 @@ def main():
     plot_tasks = [
         ('kmeans_auto', 'KMeans (Auto Search)', 'viz_01_kmeans_auto'),
         ('kmeans_k3',   'KMeans (Force K=3)',   'viz_02_kmeans_k3'),
-        ('gmm_k3',      'GMM (Force K=3)',      'viz_03_gmm_k3'),
-        ('agg_k3',      'Agglomerative (K=3)',  'viz_04_agg_k3'),
-        ('dbscan_best', 'DBSCAN (Best Param)',  'viz_05_dbscan'), # 新增 DBSCAN
+        ('gmm_auto',    'GMM (Auto Search)',    'viz_03_gmm_auto'),
+        ('gmm_k3',      'GMM (Force K=3)',      'viz_04_gmm_k3'),
+        ('agg_auto',    'Agglomerative (Auto)', 'viz_05_agg_auto'),
+        ('agg_k3',      'Agglomerative (K=3)',  'viz_06_agg_k3'),
+        ('dbscan_best', 'DBSCAN (Best Param)',  'viz_07_dbscan'),
     ]
 
     for col, title, fname_prefix in plot_tasks:

@@ -35,26 +35,34 @@ def compute_metrics(X, labels, method_name, true_labels=None):
     unique_labels = np.unique(labels)
     # DBSCAN 的噪声点标记为 -1，计算簇数量时要排除
     n_clusters = len(unique_labels) - (1 if -1 in unique_labels else 0)
+    has_noise = -1 in unique_labels
     
     # 基础指标：轮廓系数 (Silhouette)
-    # 如果只有一个簇或者全是噪声，无法计算轮廓系数
     sil = -1
     if n_clusters > 1:
-        # 通常计算轮廓系数时不包含噪声点，或者将噪声点视为单独的一类
-        # 这里我们只对非噪声点进行计算，以评价核心簇的质量
         mask = labels != -1
-        if np.sum(mask) > 2: # 至少要有3个点才能算
+        if np.sum(mask) > 2:
             try:
                 sil = silhouette_score(X[mask], labels[mask])
             except:
                 sil = -1
     
-    # 外部指标 (ARI) - 代表"不仅仅分得开，而且分得对不对"
+    # 外部指标 (ARI)
     ari = -1
+    ari_no_noise = -1
     if true_labels is not None:
         ari = adjusted_rand_score(true_labels, labels)
+        # 如果有噪声点，额外计算去除噪声后的 ARI
+        if has_noise:
+            mask = labels != -1
+            ari_no_noise = adjusted_rand_score(true_labels[mask], labels[mask])
 
-    print(f"[{method_name}] K={n_clusters} | Silhouette={sil:.4f} | ARI(准确度)={ari:.4f}")
+    if has_noise and ari_no_noise != -1:
+        noise_count = np.sum(labels == -1)
+        noise_ratio = noise_count / len(labels) * 100
+        print(f"[{method_name}] K={n_clusters} | Silhouette={sil:.4f} | ARI={ari:.4f} | ARI(去噪)={ari_no_noise:.4f} | 噪声={noise_count}({noise_ratio:.1f}%)")
+    else:
+        print(f"[{method_name}] K={n_clusters} | Silhouette={sil:.4f} | ARI(准确度)={ari:.4f}")
     return labels, sil, ari
 
 def main():
@@ -111,7 +119,12 @@ def main():
             
     print(f"   BIC建议: K={best_gmm_k} (BIC={best_bic:.2f})")
     
-    # 强制 K=3 的 GMM
+    # A. 自动选择 K 的 GMM (基于 BIC)
+    gmm_auto = GaussianMixture(n_components=best_gmm_k, random_state=RANDOM_STATE)
+    df['gmm_auto'] = gmm_auto.fit_predict(X)
+    compute_metrics(X, df['gmm_auto'], f"GMM(Auto K={best_gmm_k})", y_true)
+    
+    # B. 强制 K=3 的 GMM
     gmm_3 = GaussianMixture(n_components=3, random_state=RANDOM_STATE)
     df['gmm_k3'] = gmm_3.fit_predict(X)
     compute_metrics(X, df['gmm_k3'], "GMM(Force K=3)", y_true)
@@ -120,12 +133,30 @@ def main():
     # 3. 层次聚类 (Agglomerative)
     # -------------------------------------------------------
     print("\n>>> 3. Agglomerative (层次聚类) 实验")
+    
+    # A. 自动选择 K (基于 Silhouette)
+    best_agg_sil = -1
+    best_agg_k = 2
+    for k in range(2, 6):
+        agg = AgglomerativeClustering(n_clusters=k)
+        lbls = agg.fit_predict(X)
+        score = silhouette_score(X, lbls)
+        if score > best_agg_sil:
+            best_agg_sil = score
+            best_agg_k = k
+    
+    print(f"   Silhouette建议: K={best_agg_k} (Silhouette={best_agg_sil:.4f})")
+    agg_auto = AgglomerativeClustering(n_clusters=best_agg_k)
+    df['agg_auto'] = agg_auto.fit_predict(X)
+    compute_metrics(X, df['agg_auto'], f"Agg(Auto K={best_agg_k})", y_true)
+    
+    # B. 强制 K=3
     agg_3 = AgglomerativeClustering(n_clusters=3)
     df['agg_k3'] = agg_3.fit_predict(X)
     compute_metrics(X, df['agg_k3'], "Agg(Force K=3)", y_true)
 
     # -------------------------------------------------------
-    # 4. DBSCAN (密度聚类) - 新增部分
+    # 4. DBSCAN (密度聚类) 
     # -------------------------------------------------------
     print("\n>>> 4. DBSCAN (密度聚类) 实验")
     best_db_score = -2
