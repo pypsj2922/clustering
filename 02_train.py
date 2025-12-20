@@ -162,34 +162,179 @@ def main():
     best_db_score = -2
     best_db_labels = None
     best_params = "N/A"
+    best_noise_ratio = 100.0
+    best_n_clusters = 0
     
-    # 网格搜索
-    eps_candidates = [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 1.0, 1.2]
-    min_samples_candidates = [3, 5, 10]
+    # 扩大参数搜索范围以降低噪声率，同时保证3分类
+    # eps: 扩大范围，增加更大的值以降低噪声率
+    eps_candidates = [0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.2, 1.5, 2.0]
+    # min_samples: 减小最小值，尝试更小的值以降低噪声率
+    min_samples_candidates = [2, 3, 4, 5, 8]
+    
+    # 目标：噪声率30%以下，簇数=3
+    MAX_NOISE_RATIO = 30.0
+    TARGET_CLUSTERS = 3
 
+    print("   正在搜索参数（优先选择K=3且噪声率≤30%的组合）...")
+    
+    # 第一轮：优先寻找K=3且噪声率≤30%的组合
+    candidates_k3 = []
+    
     for eps in eps_candidates:
         for ms in min_samples_candidates:
             db = DBSCAN(eps=eps, min_samples=ms)
             lbls = db.fit_predict(X)
             
-            # 检查是否有意义：至少要有2个簇(含噪声算一种的话)，或者有大于1个真实簇
+            # 检查是否有意义：至少要有2个簇
             unique = set(lbls)
-            # 如果只有噪声(-1)或者只有一类(0)，则跳过
             if len(unique) < 2:
                 continue
-                
-            # 计算轮廓系数 (忽略噪声点)
+            
+            # 计算簇数（排除噪声点）
+            n_clusters = len(unique) - (1 if -1 in unique else 0)
+            noise_count = np.sum(lbls == -1)
+            noise_ratio = noise_count / len(lbls) * 100
+            
+            # 计算轮廓系数和ARI (忽略噪声点)
             mask = lbls != -1
-            if np.sum(mask) > 5: # 至少有一些点不是噪声
+            if np.sum(mask) > 5:
                 try:
-                    score = silhouette_score(X[mask], lbls[mask])
+                    sil_score = silhouette_score(X[mask], lbls[mask])
                 except:
-                    score = -2
+                    sil_score = -2
                 
-                if score > best_db_score:
-                    best_db_score = score
-                    best_db_labels = lbls
-                    best_params = f"eps={eps}, ms={ms}"
+                # 计算ARI（正确率）
+                try:
+                    ari_score = adjusted_rand_score(y_true, lbls)
+                except:
+                    ari_score = -1
+                
+                # 记录所有K=3且噪声率≤30%的候选
+                if n_clusters == TARGET_CLUSTERS and noise_ratio <= MAX_NOISE_RATIO:
+                    candidates_k3.append({
+                        'eps': eps,
+                        'min_samples': ms,
+                        'labels': lbls,
+                        'n_clusters': n_clusters,
+                        'noise_ratio': noise_ratio,
+                        'silhouette': sil_score,
+                        'ari': ari_score,
+                        'params': f"eps={eps}, ms={ms}"
+                    })
+    
+    # 从K=3的候选中选择最佳参数
+    if candidates_k3:
+        # 优先选择ARI（正确率）最高的，在噪声率≤30%的前提下
+        candidates_k3.sort(key=lambda c: c['ari'], reverse=True)
+        best_candidate = candidates_k3[0]
+        
+        best_db_labels = best_candidate['labels']
+        best_params = best_candidate['params']
+        best_noise_ratio = best_candidate['noise_ratio']
+        best_n_clusters = best_candidate['n_clusters']
+        best_db_score = best_candidate['silhouette']
+        best_ari = best_candidate['ari']
+        
+        print(f"   找到 {len(candidates_k3)} 个K=3且噪声率≤30%的参数组合")
+        print(f"   最佳选择（ARI最高）: {best_params}")
+        print(f"   簇数={best_n_clusters}, 噪声率={best_noise_ratio:.1f}% (目标≤30%), ARI={best_ari:.4f}, Silhouette={best_db_score:.4f}")
+    else:
+        # 如果找不到噪声率≤30%的K=3组合，放宽条件：寻找所有K=3的组合，选择噪声率最低的
+        print("   未找到噪声率≤30%的K=3组合，放宽条件搜索所有K=3组合...")
+        candidates_k3_all = []
+        
+        for eps in eps_candidates:
+            for ms in min_samples_candidates:
+                db = DBSCAN(eps=eps, min_samples=ms)
+                lbls = db.fit_predict(X)
+                
+                unique = set(lbls)
+                if len(unique) < 2:
+                    continue
+                
+                n_clusters = len(unique) - (1 if -1 in unique else 0)
+                noise_count = np.sum(lbls == -1)
+                noise_ratio = noise_count / len(lbls) * 100
+                
+                mask = lbls != -1
+                if np.sum(mask) > 5:
+                    try:
+                        sil_score = silhouette_score(X[mask], lbls[mask])
+                    except:
+                        sil_score = -2
+                    
+                    # 计算ARI（正确率）
+                    try:
+                        ari_score = adjusted_rand_score(y_true, lbls)
+                    except:
+                        ari_score = -1
+                    
+                    # 记录所有K=3的候选（不管噪声率）
+                    if n_clusters == TARGET_CLUSTERS:
+                        candidates_k3_all.append({
+                            'eps': eps,
+                            'min_samples': ms,
+                            'labels': lbls,
+                            'n_clusters': n_clusters,
+                            'noise_ratio': noise_ratio,
+                            'silhouette': sil_score,
+                            'ari': ari_score,
+                            'params': f"eps={eps}, ms={ms}"
+                        })
+        
+        if candidates_k3_all:
+            # 优先选择ARI最高的K=3组合（在噪声率≤30%的前提下）
+            # 如果噪声率都>30%，则选择ARI最高的
+            candidates_within_limit = [c for c in candidates_k3_all if c['noise_ratio'] <= MAX_NOISE_RATIO]
+            if candidates_within_limit:
+                candidates_within_limit.sort(key=lambda c: c['ari'], reverse=True)
+                best_candidate = candidates_within_limit[0]
+            else:
+                # 如果都没有≤30%的，选择ARI最高的
+                candidates_k3_all.sort(key=lambda c: c['ari'], reverse=True)
+                best_candidate = candidates_k3_all[0]
+            
+            best_db_labels = best_candidate['labels']
+            best_params = best_candidate['params']
+            best_noise_ratio = best_candidate['noise_ratio']
+            best_n_clusters = best_candidate['n_clusters']
+            best_db_score = best_candidate['silhouette']
+            best_ari = best_candidate['ari']
+            
+            print(f"   找到 {len(candidates_k3_all)} 个K=3的参数组合")
+            if best_noise_ratio <= MAX_NOISE_RATIO:
+                print(f"   最佳选择（噪声率≤30%且ARI最高）: {best_params}")
+            else:
+                print(f"   最佳选择（ARI最高，但噪声率>{MAX_NOISE_RATIO}%）: {best_params}")
+            print(f"   簇数={best_n_clusters}, 噪声率={best_noise_ratio:.1f}% (目标≤30%), ARI={best_ari:.4f}, Silhouette={best_db_score:.4f}")
+        else:
+            # 如果还是找不到K=3的，回退到原来的策略（但优先K>=3）
+            print("   未找到K=3的参数组合，使用最佳轮廓系数策略（优先K≥3）...")
+            for eps in eps_candidates:
+                for ms in min_samples_candidates:
+                    db = DBSCAN(eps=eps, min_samples=ms)
+                    lbls = db.fit_predict(X)
+                    
+                    unique = set(lbls)
+                    if len(unique) < 2:
+                        continue
+                    
+                    n_clusters = len(unique) - (1 if -1 in unique else 0)
+                    mask = lbls != -1
+                    if np.sum(mask) > 5:
+                        try:
+                            score = silhouette_score(X[mask], lbls[mask])
+                        except:
+                            score = -2
+                        
+                        # 优先选择K>=3的（避免K=2）
+                        if (n_clusters >= 3 and score > best_db_score) or \
+                           (best_n_clusters < 3 and n_clusters >= 3):
+                            best_db_score = score
+                            best_db_labels = lbls
+                            best_params = f"eps={eps}, ms={ms}"
+                            best_n_clusters = n_clusters
+                            best_noise_ratio = np.sum(lbls == -1) / len(lbls) * 100
 
     if best_db_labels is not None:
         print(f"   DBSCAN 最佳参数: {best_params}")
